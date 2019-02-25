@@ -6,6 +6,21 @@ class VolumeOrder:
     def __init__(self):
         self.client = SoftLayer.create_client_from_env()
         self.package = None
+        self.vmware_customer_flag = None
+        self.fileblock_beta_access_flag = None
+
+    def is_vmware_customer(self):
+        if self.vmware_customer_flag is None:
+            self.vmware_customer_flag = self.client['Account'].isActiveVmwareCustomer()
+
+        return self.vmware_customer_flag
+
+    def has_fileblock_beta_access(self):
+        if self.fileblock_beta_access_flag is None:
+            account = self.client['Account'].getObject(mask='mask[fileBlockBetaAccessFlag]')
+            self.fileblock_beta_access_flag = account['fileBlockBetaAccessFlag']
+
+        return self.fileblock_beta_access_flag
 
     def get_package(self):
         """
@@ -22,7 +37,7 @@ class VolumeOrder:
                     capacityRestrictionMinimum,
                     capacityRestrictionMaximum,
                     capacityRestrictionType,
-                    locationGroupId,
+                    eligibilityStrategy,
                     item[
                         attributes[
                             attributeTypeKeyName,
@@ -31,7 +46,8 @@ class VolumeOrder:
                         capacity,
                         capacityMinimum,
                         capacityMaximum
-                    ] 
+                    ],
+                    locationGroupId
                 ]
             ]'''
             object_filter = {
@@ -40,7 +56,24 @@ class VolumeOrder:
                 }
             }
             packages = self.client['Product_Package'].getAllObjects(filter=object_filter, mask=object_mask)
-            self.package = packages[0]
+            package = packages[0]
+            filtered_prices = []
+            vmware_customer_flag = self.is_vmware_customer()
+            beta_access_flag = self.has_fileblock_beta_access()
+            # Remove prices to which we don't have access to.
+            for price in package['itemPrices']:
+                eligibility_strategy = price.get('eligibilityStrategy')
+
+                if eligibility_strategy == "VMWARE_CUSTOMER" and not vmware_customer_flag:
+                    continue
+
+                if eligibility_strategy == "FILE_BLOCK_BETA_ACCESS" and not beta_access_flag:
+                    continue
+
+                filtered_prices.append(price)
+
+            package['itemPrices'] = filtered_prices
+            self.package = package
 
         return self.package
 
