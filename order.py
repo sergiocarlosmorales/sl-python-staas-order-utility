@@ -17,8 +17,7 @@ class VolumeOrder:
 
     def has_fileblock_beta_access(self):
         if self.fileblock_beta_access_flag is None:
-            account = self.client['Account'].getObject(mask='mask[fileBlockBetaAccessFlag]')
-            self.fileblock_beta_access_flag = account['fileBlockBetaAccessFlag']
+            self.fileblock_beta_access_flag = self.client['Account'].getFileBlockBetaAccessFlag()
 
         return self.fileblock_beta_access_flag
 
