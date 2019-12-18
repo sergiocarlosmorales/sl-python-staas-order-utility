@@ -10,7 +10,8 @@ class VolumeOrder:
     def get_package(self):
         """
         Get the package (offering) along with all the data we need.
-        :return: dict resembling SoftLayer_Product_Package
+        We don't assume an ID, we query by keyName which is a best practice.
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Package/
         """
         if self.package is None:
             object_mask = '''
@@ -52,10 +53,12 @@ class VolumeOrder:
         :param performance_type: string valid values are 'iops' or 'tier
         :param performance_value: int
         :param region_name: string for a region name or int for a SoftLayer_Location id
-        :return: dict resembling SoftLayer_Container_Product_Order_Receipt
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Container_Product_Order_Receipt/
         """
         package = self.get_package()
         order_container = {
+            # This is the order container type that must be sent when sending in a StaaS order
+            # @see https://sldn.softlayer.com/reference/datatypes/SoftLayer_Container_Product_Order_Network_Storage_AsAService/
             'complexType': 'SoftLayer_Container_Product_Order_Network_Storage_AsAService',
             'packageId': package['id'],
             'location': region_name,
@@ -64,13 +67,19 @@ class VolumeOrder:
         }
 
         if storage_type == 'block':
+            # Other OS Format keyNames available at:
+            # https://sldn.softlayer.com/reference/services/SoftLayer_Network_Storage_Iscsi_OS_Type/ getAllObjects().
             order_container['osFormatType'] = {
                 'keyName': 'VMWARE'
             }
 
+        # When ordering by IOPS and not by the tier, the raw IOPS number needs to be in the order container.
         if performance_type == 'iops':
             order_container['iops'] = performance_value
 
+        # These are the *main* prices that must be sent in.
+        # Additional prices are required when ordering advanced configurations like snapshot space or replication.
+        # For brevity, those are not shown here.
         order_container['prices'].append(self.get_storage_service_price())
         order_container['prices'].append(self.get_storage_type_price(storage_type))
         order_container['prices'].append(self.get_storage_space_price(size, performance_type, performance_value))
@@ -80,7 +89,8 @@ class VolumeOrder:
     def get_storage_service_price(self):
         """
         Get the price to be used for the 'service' item. This is a $0 price.
-        :return: dict resembling SoftLayer_Product_Item_Price
+        We don't hard code any ID, we use the categoryCode which is a more stable data point.
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         return self.get_standard_price_for_category('storage_as_a_service')
 
@@ -90,15 +100,20 @@ class VolumeOrder:
         If we send a standard price, and the location requires a location price, the API does the switch automatically.
         So lets leave it up to the API.
         :param category_code: string
-        :return: dict resembling SoftLayer_Product_Item_Price
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         return self.get_first_price(self.get_standard_prices_for_category(category_code))
 
     def get_standard_prices_for_category(self, category_code):
         """
         Get the standard prices for a given category code.
+        A standard price is one with locationGroupId null.
+        A location-based price is one with locationGroupId != null.
+        Certain locations require location based prices, however the API accepts standard prices (locationGroupId null)
+        and it automatically switches them to the correct ones. For simplicity purposes we deal only with standard prices.
+        The fees between standard & location prices are slightly different.
         :param category_code:
-        :return: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :return: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         package = self.get_package()
         all_prices = package['itemPrices']
@@ -112,7 +127,7 @@ class VolumeOrder:
     def is_price_for_category(price, category_code):
         """
         Determine if the given price is assigned to the category_code.
-        :param price: dict resembling SoftLayer_Product_Item_Price
+        :param price: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         :param category_code: string
         :return: bool
         """
@@ -126,7 +141,7 @@ class VolumeOrder:
         """
         Get the price for the storage type (file or block). This is a $0 price.
         :param storage_type: string
-        :return: dict resembling SoftLayer_Product_Item_Price
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         category_code = 'block' if storage_type == 'storage_block' else 'storage_file'
         return self.get_standard_price_for_category(category_code)
@@ -137,7 +152,7 @@ class VolumeOrder:
         :param size: int
         :param performance_type: string
         :param performance_value: int
-        :return: dict resembling SoftLayer_Product_Item_Price
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         category_code = 'performance_storage_iops' if performance_type == 'iops' else 'storage_tier_level'
         performance_prices = self.get_standard_prices_for_category(category_code)
@@ -165,7 +180,7 @@ class VolumeOrder:
         Get only the prices that are for a given tier level.
         :param prices: list of dicts, each element resembling SoftLayer_Product_Item_Price
         :param tier_level: int
-        :return: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :return: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         matching_prices = []
         for price in prices:
@@ -182,7 +197,7 @@ class VolumeOrder:
         :param size: int
         :param performance_type: string
         :param performance_value: int
-        :return: dict resembling SoftLayer_Product_Item_Price
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         storage_space_prices = self.get_standard_prices_for_category('performance_storage_space')
         storage_space_prices_for_performance_type = self.filter_prices_with_capacity_restriction_type(
@@ -204,9 +219,9 @@ class VolumeOrder:
     def filter_prices_by_product_capacity_for_value(prices, value):
         """
         Get the prices whose product item capacity is in range for the given value.
-        :param prices: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :param prices: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         :param value: int
-        :return: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :return: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         matches = []
         for price in prices:
@@ -221,9 +236,9 @@ class VolumeOrder:
     def filter_prices_with_capacity_restriction_type(prices, capacity_restriction_type):
         """
         Get the prices that have a particular capacityRestrictionType
-        :param prices: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :param prices: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         :param capacity_restriction_type: string
-        :return: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :return: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         return list(
             filter(lambda price: price['capacityRestrictionType'] == capacity_restriction_type, prices)
@@ -232,9 +247,9 @@ class VolumeOrder:
     def filter_prices_by_capacity_restrictions_for_value(self, prices, value):
         """
         Get the prices that match the capacity restrictions (range) for a given value.
-        :param prices: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :param prices: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         :param value: int
-        :return: list of dicts, each element resembling SoftLayer_Product_Item_Price
+        :return: list of dicts, each element resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         """
         return list(
             filter(lambda price: self.is_value_within_capacity_restrictions(price, value), prices)
@@ -244,7 +259,7 @@ class VolumeOrder:
     def is_value_within_capacity_restrictions(price, value):
         """
         Determine if the provided value falls between the capacity restrictions for the given price.
-        :param price: dict resembling SoftLayer_Product_Item_Price
+        :param price: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Product_Item_Price/
         :param value: int
         :return: bool
         """
@@ -280,15 +295,15 @@ class VolumeOrder:
     def place_order(self, order_container):
         """
         Send the provided order container to the API endpoint
-        :param order_container: dict resembling SoftLayer_Container_Product_Order_Network_Storage_AsAService
-        :return: dict resembling SoftLayer_Container_Product_Order_Receipt
+        :param order_container: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Container_Product_Order_Network_Storage_AsAService/
+        :return: dict resembling https://sldn.softlayer.com/reference/datatypes/SoftLayer_Container_Product_Order_Receipt/
         """
         return self.client['Product_Order'].placeOrder(order_container)
 
 
 if __name__ == '__main__':
-    order_size = 12000  # in GBs
-    order_storage_type = 'file'  # 'block' or 'file'
+    order_size = 100  # in GBs
+    order_storage_type = 'block'  # 'block' or 'file'
     order_performance_type = 'tier'  # 'iops' or 'tier'
     """
     The performance_value below depends on the value of performance_type.
@@ -304,8 +319,9 @@ if __name__ == '__main__':
         Examples:
             - For a volume by the IOPS, for 10000 IOPS the performance_value must be 10000
             - For a volume by the tier, for 2 IOPS per GB, the performance_value must be 200
+    Certain sizes and performance combinations are not available. The API will complain if the combination is invalid.
     """
-    order_performance_value = 200
+    order_performance_value = 100
 
     receipt = VolumeOrder().order(
         order_size,
@@ -314,4 +330,4 @@ if __name__ == '__main__':
         order_performance_value,
         'DALLAS09'
     )
-    print receipt['orderId']
+    print(receipt['orderId'])
