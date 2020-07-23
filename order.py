@@ -6,6 +6,8 @@ class VolumeOrder:
     def __init__(self):
         self.client = SoftLayer.create_client_from_env()
         self.package = None
+        self.file_block_beta_access = None
+        self.vmware_customer_access = None
 
     def get_package(self):
         """
@@ -19,6 +21,7 @@ class VolumeOrder:
                 id,
                 itemPrices[
                     id,
+                    eligibilityStrategy,
                     categories[categoryCode],
                     capacityRestrictionMinimum,
                     capacityRestrictionMaximum,
@@ -41,9 +44,78 @@ class VolumeOrder:
                 }
             }
             packages = self.client['Product_Package'].getAllObjects(filter=object_filter, mask=object_mask)
-            self.package = packages[0]
+            # Let's assume there will only be one one package
+            package = packages[0]
+
+            # FileBlock wanted to advertise that some 'bigger' sizes exist, but they are not automatically
+            # available for everyone.
+            # Let's determine if the account has access to these sizes like FileBlock Beta Access or VMware customer
+            # and take them out of the package if needed, as the customer may not have access to to them,
+            # and the API will error out if you try to use them without access.
+            if self.does_customer_have_file_block_beta_access() and self.does_customer_have_vmware_customer_access():
+                # In the extremely rare case the customer has access to both, let's favor FB Beta.
+                # Just because its a simpler flag and can be easily managed by Support if things go wrong.
+                # Let's manually set the VMware flag to False.
+                self.vmware_customer_access = False
+            if not self.does_customer_have_file_block_beta_access():
+                package['itemPrices'] = self.filter_out_prices_with_eligibility_strategy(
+                    package['itemPrices'],
+                    "FILE_BLOCK_BETA_ACCESS"
+                )
+            if not self.does_customer_have_vmware_customer_access():
+                package['itemPrices'] = self.filter_out_prices_with_eligibility_strategy(
+                    package['itemPrices'],
+                    "VMWARE_CUSTOMER"
+                )
+            self.package = package
 
         return self.package
+
+    @staticmethod
+    def filter_out_prices_with_eligibility_strategy(prices, eligibility_strategy):
+        """
+        Take out prices that match a given eligibility strategy.
+        :param prices: list of prices, resembling SoftLayer_Product_Item_Price
+        :param eligibility_strategy: string matching the eligibility strategy of prices that will be removed.
+        :return: list of SoftLayer_Product_Item_Price resembling objects.
+        """
+        prices_with_access = []
+        for price in prices:
+            if 'eligibilityStrategy' in price and price['eligibilityStrategy'] == eligibility_strategy:
+                # No access, move on.
+                continue
+            prices_with_access.append(price)
+        return prices_with_access
+
+    def does_customer_have_file_block_beta_access(self):
+        """
+        Determine from the current context if the account has access as a file block beta access customer.
+        This gives you access to order 'bigger' sizes, like 16 TB.
+        :return: bool
+        """
+        if self.file_block_beta_access is None:
+            object_mask = '''
+            mask[
+                id,
+                fileBlockBetaAccessFlag
+            ]'''
+
+            account = self.client['Account'].getObject(mask=object_mask)
+            self.file_block_beta_access = account['fileBlockBetaAccessFlag']
+
+        return self.file_block_beta_access
+
+    def does_customer_have_vmware_customer_access(self):
+        """
+        Determine from the current context if the account has access as a VMware customer.
+        This gives you access to order 'bigger' sizes, like 16 TB.
+        This query can be very expensive on big accounts, strongly recommended to cache it.
+        :return: bool
+        """
+        if self.vmware_customer_access is None:
+            self.vmware_customer_access = self.client['Account'].isActiveVmwareCustomer()
+
+        return self.vmware_customer_access
 
     def order(self, size, storage_type, performance_type, performance_value, region_name):
         """
